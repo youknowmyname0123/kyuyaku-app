@@ -39,7 +39,25 @@
           <input type="file" accept="image/*" capture="environment" id="imageInput">
           📷 写真を撮る・写真を選ぶ
         </label>
-        <img id="preview" hidden alt="アップロードした画像のプレビュー">
+
+        <div id="cropArea" hidden>
+          <p class="hint">薬剤名が書かれている範囲を枠で囲んでください。向きがおかしい場合は回転ボタンで調整できます。範囲を変えて何度も読み取ることができます。</p>
+          <div class="rotate-controls">
+            <button type="button" id="rotateLeftBtn" class="ghost-btn">⟲ 左に回転</button>
+            <button type="button" id="rotateRightBtn" class="ghost-btn">⟳ 右に回転</button>
+          </div>
+          <div class="crop-container" id="cropContainer">
+            <canvas id="previewCanvas"></canvas>
+            <div class="crop-box" id="cropBox">
+              <div class="crop-handle" data-handle="nw"></div>
+              <div class="crop-handle" data-handle="ne"></div>
+              <div class="crop-handle" data-handle="sw"></div>
+              <div class="crop-handle" data-handle="se"></div>
+            </div>
+          </div>
+          <button type="button" id="runOcrBtn">この範囲を読み取ってテキストに追加</button>
+        </div>
+
         <div id="ocrProgress" hidden>
           <div class="progress-track"><div class="progress-bar" id="ocrProgressBar"></div></div>
           <p id="ocrProgressText"></p>
@@ -49,7 +67,10 @@
       <section class="card">
         <h2>3. 読み取り結果(修正できます)</h2>
         <textarea id="ocrText" placeholder="ここに読み取った文字が表示されます。誤読がある場合は直接修正してください。手入力でも構いません。"></textarea>
-        <button id="checkBtn">この内容で休薬対象薬をチェックする</button>
+        <div class="button-row">
+          <button id="clearTextBtn" class="ghost-btn">テキストをクリア</button>
+          <button id="checkBtn">この内容で休薬対象薬をチェックする</button>
+        </div>
       </section>
 
       <section class="card">

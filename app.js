@@ -621,10 +621,20 @@ function renderSearchResults(query) {
 }
 
 /* =========================================================
-   画像の前処理(グレースケール化 + コントラスト補正)
+   画像処理(回転・範囲選択・二値化)
    ========================================================= */
 
-async function preprocessImage(file) {
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
+// クロップ操作の状態
+const cropState = {
+  sourceCanvas: null, // 回転後の元画像(フル解像度)
+};
+let cropRect = null;   // {x, y, w, h} … クロップ枠(表示上のCSS px、cropContainer基準)
+let cropDrag = null;    // ドラッグ中の情報
+
+// 画像ファイルをcanvasに読み込む(長辺2600pxを上限にリサイズ)
+async function loadFileToCanvas(file) {
   const img = await new Promise((resolve, reject) => {
     const i = new Image();
     i.onload = () => resolve(i);
@@ -632,7 +642,7 @@ async function preprocessImage(file) {
     i.src = URL.createObjectURL(file);
   });
 
-  const maxDim = 1800;
+  const maxDim = 2600;
   let { width, height } = img;
   if (width > maxDim || height > maxDim) {
     const scale = maxDim / Math.max(width, height);
@@ -643,32 +653,219 @@ async function preprocessImage(file) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, 0, 0, width, height);
+  canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+  return canvas;
+}
 
-  const imageData = ctx.getImageData(0, 0, width, height);
+// canvasを90度回転した新しいcanvasを返す
+function rotateCanvas90(src, clockwise) {
+  const dst = document.createElement("canvas");
+  dst.width = src.height;
+  dst.height = src.width;
+  const ctx = dst.getContext("2d");
+  if (clockwise) {
+    ctx.translate(dst.width, 0);
+    ctx.rotate(Math.PI / 2);
+  } else {
+    ctx.translate(0, dst.height);
+    ctx.rotate(-Math.PI / 2);
+  }
+  ctx.drawImage(src, 0, 0);
+  return dst;
+}
+
+// グレースケール化 + 大津の二値化(自動でコントラストを最大化)
+function binarizeOtsu(imageData) {
   const data = imageData.data;
+  const n = data.length / 4;
+  const gray = new Uint8ClampedArray(n);
+  const hist = new Array(256).fill(0);
 
-  // グレースケール化
-  let min = 255, max = 0;
-  const grays = new Uint8ClampedArray(width * height);
-  for (let i = 0; i < data.length; i += 4) {
-    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    grays[i / 4] = gray;
-    if (gray < min) min = gray;
-    if (gray > max) max = gray;
-  }
-
-  // コントラスト・ストレッチ
-  const range = Math.max(1, max - min);
-  for (let i = 0; i < grays.length; i++) {
-    const stretched = ((grays[i] - min) / range) * 255;
+  for (let i = 0; i < n; i++) {
     const idx = i * 4;
-    data[idx] = data[idx + 1] = data[idx + 2] = stretched;
+    const g = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+    gray[i] = g;
+    hist[Math.round(g)]++;
   }
 
+  let sumAll = 0;
+  for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+
+  let sumB = 0, wB = 0, best = -1, threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = n - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sumAll - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) {
+      best = between;
+      threshold = t;
+    }
+  }
+
+  for (let i = 0; i < n; i++) {
+    const v = gray[i] > threshold ? 255 : 0;
+    const idx = i * 4;
+    data[idx] = data[idx + 1] = data[idx + 2] = v;
+  }
+}
+
+// 選択中の画像をプレビューcanvasに描画
+function drawPreview() {
+  const canvas = $("#previewCanvas");
+  canvas.width = cropState.sourceCanvas.width;
+  canvas.height = cropState.sourceCanvas.height;
+  canvas.getContext("2d").drawImage(cropState.sourceCanvas, 0, 0);
+}
+
+// クロップ枠を画像全体に近い初期位置(上下左右4%マージン)にリセット
+function resetCropRect() {
+  requestAnimationFrame(() => {
+    const rect = $("#cropContainer").getBoundingClientRect();
+    const mx = rect.width * 0.04;
+    const my = rect.height * 0.04;
+    cropRect = {
+      x: mx, y: my,
+      w: Math.max(20, rect.width - mx * 2),
+      h: Math.max(20, rect.height - my * 2),
+    };
+    updateCropBoxDom();
+  });
+}
+
+function updateCropBoxDom() {
+  const box = $("#cropBox");
+  box.style.left = `${cropRect.x}px`;
+  box.style.top = `${cropRect.y}px`;
+  box.style.width = `${cropRect.w}px`;
+  box.style.height = `${cropRect.h}px`;
+}
+
+function onCropPointerDown(e, type) {
+  e.preventDefault();
+  const containerRect = $("#cropContainer").getBoundingClientRect();
+  cropDrag = {
+    type,
+    startX: e.clientX,
+    startY: e.clientY,
+    startRect: { ...cropRect },
+    containerRect,
+  };
+  document.addEventListener("pointermove", onCropPointerMove);
+  document.addEventListener("pointerup", onCropPointerUp);
+}
+
+function onCropPointerMove(e) {
+  if (!cropDrag) return;
+  const dx = e.clientX - cropDrag.startX;
+  const dy = e.clientY - cropDrag.startY;
+  const { x, y, w, h } = cropDrag.startRect;
+  const cw = cropDrag.containerRect.width;
+  const ch = cropDrag.containerRect.height;
+  const min = 32;
+
+  let nx = x, ny = y, nw = w, nh = h;
+  switch (cropDrag.type) {
+    case "move":
+      nx = clamp(x + dx, 0, cw - w);
+      ny = clamp(y + dy, 0, ch - h);
+      break;
+    case "nw":
+      nx = clamp(x + dx, 0, x + w - min);
+      ny = clamp(y + dy, 0, y + h - min);
+      nw = x + w - nx;
+      nh = y + h - ny;
+      break;
+    case "ne":
+      nw = clamp(w + dx, min, cw - x);
+      ny = clamp(y + dy, 0, y + h - min);
+      nh = y + h - ny;
+      break;
+    case "sw":
+      nx = clamp(x + dx, 0, x + w - min);
+      nw = x + w - nx;
+      nh = clamp(h + dy, min, ch - y);
+      break;
+    case "se":
+      nw = clamp(w + dx, min, cw - x);
+      nh = clamp(h + dy, min, ch - y);
+      break;
+  }
+  cropRect = { x: nx, y: ny, w: nw, h: nh };
+  updateCropBoxDom();
+}
+
+function onCropPointerUp() {
+  cropDrag = null;
+  document.removeEventListener("pointermove", onCropPointerMove);
+  document.removeEventListener("pointerup", onCropPointerUp);
+}
+
+// クロップ枠の範囲を元画像から切り出し、二値化したdataURLを返す
+function extractCroppedDataUrl() {
+  const containerRect = $("#cropContainer").getBoundingClientRect();
+  const scaleX = cropState.sourceCanvas.width / containerRect.width;
+  const scaleY = cropState.sourceCanvas.height / containerRect.height;
+
+  const sx = Math.round(cropRect.x * scaleX);
+  const sy = Math.round(cropRect.y * scaleY);
+  const sw = Math.max(1, Math.round(cropRect.w * scaleX));
+  const sh = Math.max(1, Math.round(cropRect.h * scaleY));
+
+  // 範囲が小さい場合は拡大してOCR精度を上げる(最大3倍)
+  const targetMin = 1000;
+  const upscale = Math.max(sw, sh) < targetMin
+    ? Math.min(3, targetMin / Math.max(sw, sh))
+    : 1;
+  const outW = Math.max(1, Math.round(sw * upscale));
+  const outH = Math.max(1, Math.round(sh * upscale));
+
+  const out = document.createElement("canvas");
+  out.width = outW;
+  out.height = outH;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(cropState.sourceCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
+
+  const imageData = ctx.getImageData(0, 0, outW, outH);
+  binarizeOtsu(imageData);
   ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
+
+  return out.toDataURL("image/png");
+}
+
+/* =========================================================
+   OCR実行
+   ========================================================= */
+
+let ocrWorker = null;
+
+// Tesseractワーカーを作成・再利用する(範囲を一様なブロックとして読み取るモードに設定)
+async function getOcrWorker(logger) {
+  if (!ocrWorker) {
+    ocrWorker = await Tesseract.createWorker("jpn", undefined, { logger });
+    try {
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: "6" });
+    } catch (e) {
+      console.warn("setParameters failed (続行します):", e);
+    }
+  }
+  return ocrWorker;
+}
+
+async function recognizeText(dataUrl, logger) {
+  try {
+    const worker = await getOcrWorker(logger);
+    const { data } = await worker.recognize(dataUrl);
+    return data.text || "";
+  } catch (err) {
+    console.warn("ワーカーでの認識に失敗したため簡易モードで再試行します:", err);
+    const { data } = await Tesseract.recognize(dataUrl, "jpn", { logger });
+    return data.text || "";
+  }
 }
 
 /* =========================================================
@@ -688,39 +885,58 @@ function hideProgress() {
   $("#ocrProgress").hidden = true;
 }
 
+// 画像が選択されたら、回転・範囲選択UIを表示する(OCRはまだ実行しない)
 async function handleImageSelected(file) {
   if (!file) return;
 
-  const preview = $("#preview");
-  preview.src = URL.createObjectURL(file);
-  preview.hidden = false;
-
-  $("#checkBtn").disabled = true;
-  $("#ocrText").value = "";
-  setProgress(0, "画像を準備しています…");
+  $("#cropArea").hidden = true;
 
   try {
-    const processedDataUrl = await preprocessImage(file);
+    cropState.sourceCanvas = await loadFileToCanvas(file);
+    drawPreview();
+    $("#cropArea").hidden = false;
+    resetCropRect();
+  } catch (err) {
+    console.error(err);
+    alert("画像の読み込みに失敗しました。もう一度お試しください。");
+  }
+}
 
-    const { data } = await Tesseract.recognize(processedDataUrl, "jpn", {
-      logger: (m) => {
-        if (m.status === "recognizing text") {
-          setProgress(m.progress, `文字を読み取っています… ${Math.round(m.progress * 100)}%`);
-        } else if (m.status) {
-          setProgress(0.02, "準備中: " + m.status);
-        }
-      },
+function rotateImage(clockwise) {
+  if (!cropState.sourceCanvas) return;
+  cropState.sourceCanvas = rotateCanvas90(cropState.sourceCanvas, clockwise);
+  drawPreview();
+  resetCropRect();
+}
+
+// 選択中の範囲でOCRを実行し、結果をテキスト欄に追記する
+async function runOcrOnCrop() {
+  if (!cropState.sourceCanvas || !cropRect) return;
+
+  const runBtn = $("#runOcrBtn");
+  runBtn.disabled = true;
+  setProgress(0, "選択範囲を処理しています…");
+
+  try {
+    const dataUrl = extractCroppedDataUrl();
+    const text = await recognizeText(dataUrl, (m) => {
+      if (m.status === "recognizing text") {
+        setProgress(m.progress, `文字を読み取っています… ${Math.round(m.progress * 100)}%`);
+      } else if (m.status) {
+        setProgress(0.02, "準備中: " + m.status);
+      }
     });
 
-    $("#ocrText").value = (data.text || "").trim();
+    const trimmed = text.trim();
+    const ta = $("#ocrText");
+    ta.value = ta.value.trim() ? `${ta.value.trim()}\n${trimmed}` : trimmed;
     hideProgress();
   } catch (err) {
     console.error(err);
     hideProgress();
-    $("#ocrText").value = "";
-    alert("文字の読み取り中にエラーが発生しました。お手数ですが、薬剤名を直接入力するか、写真を撮り直してお試しください。");
+    alert("文字の読み取り中にエラーが発生しました。範囲を変えるか、薬剤名を直接入力してください。");
   } finally {
-    $("#checkBtn").disabled = false;
+    runBtn.disabled = false;
   }
 }
 
@@ -745,6 +961,21 @@ function init() {
 
   $("#imageInput").addEventListener("change", (e) => {
     handleImageSelected(e.target.files[0]);
+    // 同じファイルを選び直したときも change が発火するようにリセット
+    e.target.value = "";
+  });
+
+  $("#rotateLeftBtn").addEventListener("click", () => rotateImage(false));
+  $("#rotateRightBtn").addEventListener("click", () => rotateImage(true));
+  $("#runOcrBtn").addEventListener("click", runOcrOnCrop);
+
+  $("#cropBox").addEventListener("pointerdown", (e) => {
+    const handle = e.target.closest(".crop-handle");
+    onCropPointerDown(e, handle ? handle.dataset.handle : "move");
+  });
+
+  $("#clearTextBtn").addEventListener("click", () => {
+    $("#ocrText").value = "";
   });
 
   $("#checkBtn").addEventListener("click", () => {

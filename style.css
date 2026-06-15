@@ -176,12 +176,106 @@ input:focus, textarea:focus, button:focus-visible {
   display: none;
 }
 
-#preview {
-  display: block;
-  width: 100%;
+/* ---------- Rotate / crop UI ---------- */
+.rotate-controls {
+  display: flex;
+  gap: 8px;
   margin-top: 12px;
+}
+
+.ghost-btn {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #FCFBF8;
+  color: var(--primary-dark);
+  font-weight: 700;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ghost-btn:active {
+  background: #F0EEE6;
+}
+
+.crop-container {
+  position: relative;
+  width: 100%;
+  margin-top: 10px;
+  overflow: hidden;
   border-radius: 8px;
   border: 1px solid var(--border);
+  background: #1A1A18;
+  touch-action: none;
+}
+
+#previewCanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.crop-box {
+  position: absolute;
+  border: 2px solid #fff;
+  outline: 2px solid var(--primary);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  background: var(--primary);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  touch-action: none;
+}
+
+.crop-handle.nw { top: -13px; left: -13px; cursor: nwse-resize; }
+.crop-handle.ne { top: -13px; right: -13px; cursor: nesw-resize; }
+.crop-handle.sw { bottom: -13px; left: -13px; cursor: nesw-resize; }
+.crop-handle.se { bottom: -13px; right: -13px; cursor: nwse-resize; }
+
+#runOcrBtn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+#runOcrBtn:disabled {
+  background: #9FB8B3;
+  cursor: not-allowed;
+}
+
+#runOcrBtn:active:not(:disabled) {
+  background: var(--primary-dark);
+}
+
+/* ---------- Text area button row ---------- */
+.button-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.button-row #checkBtn {
+  flex: 1;
+  margin-top: 0;
+}
+
+.button-row #clearTextBtn {
+  flex: 0 0 108px;
 }
 
 #checkBtn {
