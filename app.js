@@ -841,21 +841,28 @@ function extractCroppedDataUrl() {
    OCR実行
    ========================================================= */
 
-// 高精度(best)モデルの配布元。標準(fast)モデルより認識精度が高いですが、
-// 初回ダウンロードが大きくなります(jpn: 約14MB。一度ダウンロードされればキャッシュされます)。
-const TESSDATA_BEST_PATH = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/";
+// 一定時間で打ち切り、フリーズしたまま動かなくなることを防ぐ
+const OCR_TIMEOUT_MS = 30000;
 
 let ocrWorker = null;
-let useBestModel = true; // 高精度モデルの読み込みに失敗した場合はfalseにして標準モデルへ切替
+let ocrCancelRequested = false;
 
-// Tesseractワーカーを作成・再利用する(高精度モデル・範囲を一様なブロックとして読み取るモードに設定)
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label || "処理"}がタイムアウトしました(${Math.round(ms / 1000)}秒)`));
+    }, ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
+// Tesseractワーカーを作成・再利用する(範囲を一様なブロックとして読み取るモードに設定)
 async function getOcrWorker(logger) {
   if (ocrWorker) return ocrWorker;
-  ocrWorker = await Tesseract.createWorker("jpn", undefined, {
-    langPath: TESSDATA_BEST_PATH,
-    gzip: false,
-    logger,
-  });
+  ocrWorker = await Tesseract.createWorker("jpn", undefined, { logger });
   try {
     await ocrWorker.setParameters({ tessedit_pageseg_mode: "6" });
   } catch (e) {
@@ -864,21 +871,29 @@ async function getOcrWorker(logger) {
   return ocrWorker;
 }
 
-async function recognizeText(dataUrl, logger) {
-  if (useBestModel) {
+// 実行中のOCRワーカーを強制終了する(キャンセル・タイムアウト・エラー時)
+async function resetOcrWorker() {
+  const w = ocrWorker;
+  ocrWorker = null;
+  if (w) {
     try {
-      const worker = await getOcrWorker(logger);
-      const { data } = await worker.recognize(dataUrl);
-      return data.text || "";
-    } catch (err) {
-      console.warn("高精度モデルの読み込みに失敗したため、以後は標準モデルを使用します:", err);
-      useBestModel = false;
-      ocrWorker = null;
+      await w.terminate();
+    } catch (e) {
+      console.warn("worker terminate failed:", e);
     }
   }
+}
 
-  const { data } = await Tesseract.recognize(dataUrl, "jpn", { logger });
-  return data.text || "";
+async function recognizeText(dataUrl, logger) {
+  try {
+    const worker = await withTimeout(getOcrWorker(logger), OCR_TIMEOUT_MS, "OCRエンジンの準備");
+    if (ocrCancelRequested) throw new Error("cancelled");
+    const { data } = await withTimeout(worker.recognize(dataUrl), OCR_TIMEOUT_MS, "文字認識");
+    return data.text || "";
+  } catch (err) {
+    await resetOcrWorker();
+    throw err;
+  }
 }
 
 /* =========================================================
@@ -927,7 +942,10 @@ async function runOcrOnCrop() {
   if (!cropState.sourceCanvas || !cropRect) return;
 
   const runBtn = $("#runOcrBtn");
+  const cancelBtn = $("#cancelOcrBtn");
+  ocrCancelRequested = false;
   runBtn.disabled = true;
+  cancelBtn.hidden = false;
   setProgress(0, "選択範囲を処理しています…");
 
   try {
@@ -936,9 +954,9 @@ async function runOcrOnCrop() {
       if (m.status === "recognizing text") {
         setProgress(m.progress, `文字を読み取っています… ${Math.round(m.progress * 100)}%`);
       } else if (m.status === "loading language traineddata") {
-        setProgress(m.progress, `高精度モデルを準備しています… ${Math.round(m.progress * 100)}%(初回のみ時間がかかります)`);
+        setProgress(m.progress, `言語データを準備しています… ${Math.round((m.progress || 0) * 100)}%(初回のみ時間がかかります)`);
       } else if (m.status === "loading tesseract core" || m.status === "initializing tesseract") {
-        setProgress(Math.max(0.02, m.progress || 0), "OCRエンジンを準備しています…");
+        setProgress(Math.max(0.02, m.progress || 0), "OCRエンジンを準備しています…(初回のみ時間がかかります)");
       } else if (m.status) {
         setProgress(0.02, "準備中: " + m.status);
       }
@@ -951,10 +969,25 @@ async function runOcrOnCrop() {
   } catch (err) {
     console.error(err);
     hideProgress();
-    alert("文字の読み取り中にエラーが発生しました。範囲を変えるか、薬剤名を直接入力してください。");
+    if (ocrCancelRequested) {
+      // キャンセル時はアラートを出さない
+    } else if (String(err.message || "").includes("タイムアウト")) {
+      alert("文字の読み取りが時間内に終わりませんでした(通信状況などが原因の可能性があります)。お手数ですが、範囲を小さくして再度お試しいただくか、薬剤名を直接入力してください。");
+    } else {
+      alert("文字の読み取り中にエラーが発生しました。範囲を変えるか、薬剤名を直接入力してください。");
+    }
   } finally {
     runBtn.disabled = false;
+    cancelBtn.hidden = true;
+    ocrCancelRequested = false;
   }
+}
+
+// 実行中のOCRをキャンセルする
+async function cancelOcr() {
+  ocrCancelRequested = true;
+  setProgress(0, "キャンセルしています…");
+  await resetOcrWorker();
 }
 
 function addManualDrug(drug, matchedName) {
@@ -985,6 +1018,7 @@ function init() {
   $("#rotateLeftBtn").addEventListener("click", () => rotateImage(false));
   $("#rotateRightBtn").addEventListener("click", () => rotateImage(true));
   $("#runOcrBtn").addEventListener("click", runOcrOnCrop);
+  $("#cancelOcrBtn").addEventListener("click", cancelOcr);
 
   $("#cropBox").addEventListener("pointerdown", (e) => {
     const handle = e.target.closest(".crop-handle");
@@ -1031,11 +1065,13 @@ function init() {
 
 document.addEventListener("DOMContentLoaded", init);
 
-// オフライン利用のためサービスワーカーを登録
+// オフライン利用のためサービスワーカーを登録(更新があれば即時チェック)
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch((err) => {
-      console.warn("Service worker registration failed:", err);
-    });
+    navigator.serviceWorker.register("./sw.js")
+      .then((reg) => reg.update())
+      .catch((err) => {
+        console.warn("Service worker registration failed:", err);
+      });
   });
 }

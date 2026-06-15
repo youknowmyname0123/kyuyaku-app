@@ -5,7 +5,7 @@
     (上げないと古いキャッシュが使われ続けることがあります)
 */
 
-const CACHE_NAME = "preop-med-check-v1";
+const CACHE_NAME = "preop-med-check-v2";
 const APP_SHELL = [
   "./",
   "./index.html",

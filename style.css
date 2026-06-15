@@ -326,6 +326,11 @@ input:focus, textarea:focus, button:focus-visible {
   color: var(--muted);
 }
 
+#cancelOcrBtn {
+  width: 100%;
+  margin-top: 8px;
+}
+
 /* ---------- Search ---------- */
 #searchResults {
   display: flex;
