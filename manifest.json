@@ -1,0 +1,20 @@
+{
+  "name": "術前休薬チェッカー",
+  "short_name": "休薬チェッカー",
+  "description": "お薬手帳・処方箋の写真から、術前に休薬が必要な薬を確認する参考ツール",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F7F4EC",
+  "theme_color": "#1F4B43",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

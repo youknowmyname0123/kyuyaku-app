@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+  <title>術前休薬チェッカー</title>
+  <meta name="theme-color" content="#1F4B43">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="app-header">
+      <div class="header-inner">
+        <span class="stamp">休</span>
+        <div>
+          <h1>術前休薬チェッカー</h1>
+          <p class="subtitle">お薬手帳・処方箋の写真から、術前に休薬が必要な薬を確認します</p>
+        </div>
+      </div>
+    </header>
+
+    <div class="disclaimer">
+      ⚠️ 本アプリの判定結果は、一般的なガイドライン値に基づく<strong>参考情報</strong>です。薬剤の最新の添付文書・各学会のガイドライン・施設のプロトコル・患者個別のリスク(緊急度、腎機能、出血リスク、血栓リスクなど)を踏まえ、最終的な休薬の判断は必ず医師が行ってください。
+    </div>
+
+    <main>
+
+      <section class="card">
+        <h2>1. 手術予定日(任意)</h2>
+        <input type="date" id="surgeryDate">
+        <p class="hint">入力すると、各薬剤の休薬開始日と残り日数を自動で表示します。</p>
+      </section>
+
+      <section class="card">
+        <h2>2. お薬手帳・処方箋を撮影 / 選択</h2>
+        <label class="file-btn">
+          <input type="file" accept="image/*" capture="environment" id="imageInput">
+          📷 写真を撮る・写真を選ぶ
+        </label>
+        <img id="preview" hidden alt="アップロードした画像のプレビュー">
+        <div id="ocrProgress" hidden>
+          <div class="progress-track"><div class="progress-bar" id="ocrProgressBar"></div></div>
+          <p id="ocrProgressText"></p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3. 読み取り結果(修正できます)</h2>
+        <textarea id="ocrText" placeholder="ここに読み取った文字が表示されます。誤読がある場合は直接修正してください。手入力でも構いません。"></textarea>
+        <button id="checkBtn">この内容で休薬対象薬をチェックする</button>
+      </section>
+
+      <section class="card">
+        <h2>薬剤を手動で追加する</h2>
+        <input type="text" id="drugSearch" placeholder="薬剤名を入力(例: プラビックス、ワーファリン)">
+        <div id="searchResults"></div>
+      </section>
+
+      <section id="resultsSection" hidden>
+        <h2>チェック結果</h2>
+        <div id="matchedDrugs"></div>
+        <div id="fuzzyDrugs"></div>
+      </section>
+
+      <section class="card">
+        <details>
+          <summary>登録されている薬剤データベースを見る</summary>
+          <div id="dbList"></div>
+          <p class="hint">このリストに含まれない薬剤でも、休薬が必要な場合があります。必ず最新の情報と併せてご確認ください。</p>
+        </details>
+      </section>
+
+    </main>
+
+    <footer>
+      本アプリは院内の術前チェック作業を補助するための参考ツールであり、診断・治療方針を決定するものではありません。データは外部に送信されず、お使いの端末内のみで処理されます。
+    </footer>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
