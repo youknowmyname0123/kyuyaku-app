@@ -841,31 +841,44 @@ function extractCroppedDataUrl() {
    OCR実行
    ========================================================= */
 
-let ocrWorker = null;
+// 高精度(best)モデルの配布元。標準(fast)モデルより認識精度が高いですが、
+// 初回ダウンロードが大きくなります(jpn: 約14MB。一度ダウンロードされればキャッシュされます)。
+const TESSDATA_BEST_PATH = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/";
 
-// Tesseractワーカーを作成・再利用する(範囲を一様なブロックとして読み取るモードに設定)
+let ocrWorker = null;
+let useBestModel = true; // 高精度モデルの読み込みに失敗した場合はfalseにして標準モデルへ切替
+
+// Tesseractワーカーを作成・再利用する(高精度モデル・範囲を一様なブロックとして読み取るモードに設定)
 async function getOcrWorker(logger) {
-  if (!ocrWorker) {
-    ocrWorker = await Tesseract.createWorker("jpn", undefined, { logger });
-    try {
-      await ocrWorker.setParameters({ tessedit_pageseg_mode: "6" });
-    } catch (e) {
-      console.warn("setParameters failed (続行します):", e);
-    }
+  if (ocrWorker) return ocrWorker;
+  ocrWorker = await Tesseract.createWorker("jpn", undefined, {
+    langPath: TESSDATA_BEST_PATH,
+    gzip: false,
+    logger,
+  });
+  try {
+    await ocrWorker.setParameters({ tessedit_pageseg_mode: "6" });
+  } catch (e) {
+    console.warn("setParameters failed (続行します):", e);
   }
   return ocrWorker;
 }
 
 async function recognizeText(dataUrl, logger) {
-  try {
-    const worker = await getOcrWorker(logger);
-    const { data } = await worker.recognize(dataUrl);
-    return data.text || "";
-  } catch (err) {
-    console.warn("ワーカーでの認識に失敗したため簡易モードで再試行します:", err);
-    const { data } = await Tesseract.recognize(dataUrl, "jpn", { logger });
-    return data.text || "";
+  if (useBestModel) {
+    try {
+      const worker = await getOcrWorker(logger);
+      const { data } = await worker.recognize(dataUrl);
+      return data.text || "";
+    } catch (err) {
+      console.warn("高精度モデルの読み込みに失敗したため、以後は標準モデルを使用します:", err);
+      useBestModel = false;
+      ocrWorker = null;
+    }
   }
+
+  const { data } = await Tesseract.recognize(dataUrl, "jpn", { logger });
+  return data.text || "";
 }
 
 /* =========================================================
@@ -922,6 +935,10 @@ async function runOcrOnCrop() {
     const text = await recognizeText(dataUrl, (m) => {
       if (m.status === "recognizing text") {
         setProgress(m.progress, `文字を読み取っています… ${Math.round(m.progress * 100)}%`);
+      } else if (m.status === "loading language traineddata") {
+        setProgress(m.progress, `高精度モデルを準備しています… ${Math.round(m.progress * 100)}%(初回のみ時間がかかります)`);
+      } else if (m.status === "loading tesseract core" || m.status === "initializing tesseract") {
+        setProgress(Math.max(0.02, m.progress || 0), "OCRエンジンを準備しています…");
       } else if (m.status) {
         setProgress(0.02, "準備中: " + m.status);
       }
